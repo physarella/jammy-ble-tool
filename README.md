@@ -8,44 +8,91 @@ on — the same thing the old app did. No risk to the guitar.
 
 You need: Linux with Bluetooth, and Nix. (You're on NixOS, so you're set.)
 
-## 1. Open a terminal in this folder
+## Setup, one time only
 
-Unzip it, `cd` into the folder.
+```bash
+git clone https://github.com/physarella/jammy-ble-tool.git
+cd jammy-ble-tool
+nix develop
+```
 
-## 2. Make sure Bluetooth is on
+If flakes complain, use:
+```bash
+nix --extra-experimental-features 'nix-command flakes' develop
+```
 
-    systemctl status bluetooth
+Every time after that, just:
+```bash
+git pull
+```
+to grab the latest fixes before running anything.
 
-If it's not running:
+## How to pair the guitar (found 2026-09-07)
 
-    sudo systemctl start bluetooth
+**Turn the guitar on, then press and hold the Volume KNOB (push straight in
+on it, it's a knob not a button) for 5 seconds.**
 
-## 3. Enter the tool's shell
+Watch for this: **the Power button starts blinking blue.** That's the
+confirmation it worked and the guitar is now open for pairing. If it doesn't
+blink blue, the hold didn't register — try again.
 
-    nix develop
+The pairing window is short once it starts blinking, so run the pairing
+command right away, don't wait around.
 
-If it complains about "experimental features", use this instead:
+```bash
+{
+  echo "power on";                        sleep 1
+  echo "agent on";                        sleep 1
+  echo "default-agent";                   sleep 1
+  echo "scan on";                         sleep 8
+  echo "scan off";                        sleep 1
+  echo "pair 8C:F7:10:7A:8B:43";          sleep 10
+  echo "trust 8C:F7:10:7A:8B:43";         sleep 1
+  echo "quit"
+} | bluetoothctl
+```
 
-    nix --extra-experimental-features 'nix-command flakes' develop
+(Replace the address if it's a different guitar — find it with
+`python jammy_ble.py scan`.)
 
-The first time, it downloads Python + the Bluetooth library. Takes a minute.
+Takes about 20 seconds total, that's normal. Watch for the line right after
+"Attempting to pair" — should say "Pairing successful."
 
-## 4. Step one — safe check (reads only, changes nothing)
+### STATUS as of 2026-09-07: pairing not yet confirmed working
 
-    python jammy_ble.py scan
+We know the button-hold + blue blink is needed. We have NOT yet seen a
+successful pair. Next session: try the button hold, watch for the blue
+light, then immediately run the pairing block above and see what it says.
 
-This finds the guitar, connects, lists what it offers, and prints the battery.
-Turn the guitar ON first. Copy everything it prints and send it back.
+## Once paired: get the WiFi login
 
-## 5. Step two — turn the guitar's WiFi on and get the login
+```bash
+python jammy_ble.py --address 8C:F7:10:7A:8B:43 wifi
+```
 
-    python jammy_ble.py wifi
+This registers with the guitar, turns its WiFi on, and reads back the
+network name + password. If it finds them it prints a ready-to-run `nmcli`
+command to join that network.
 
-Look in the output for a line saying WIFI_HOTSPOT_RESPONSE. It contains:
-    n = the WiFi network name
-    p = the WiFi password
-    u = a URL     t = a token
-Send that whole output back.
+## Safe first check (reads only, no pairing needed)
+
+```bash
+python jammy_ble.py scan
+```
+
+Finds the guitar, lists what it offers, reads the battery level. Confirmed
+working already — the guitar has answered this every time.
+
+## What we know about the guitar so far
+
+- Bluetooth name: `Jammy461`, address `8C:F7:10:7A:8B:43`
+- Firmware: 2.0.1, soundbank 1.2, serial `1903J31RB02461`
+- It also answers over USB as a class-compliant MIDI device (`amidi -l`
+  shows it) — that side is fully working already, no Bluetooth needed for
+  basic playing or reading its version/name/serial/battery.
+- Bluetooth side needs pairing (see above) before it will hand over WiFi
+  credentials — everything else (browsing its services, reading battery)
+  works over Bluetooth without pairing.
 
 ## If "scan" can't find the guitar
 
