@@ -28,6 +28,10 @@ from bleak import BleakScanner, BleakClient
 
 SVC   = "9f3e05e2-2766-4c7d-b4c5-82c6124b803d"
 MSG   = "8401a4f1-7a76-42bd-98bb-dad5d4a9f634"
+# Seen on the real hardware but NOT in the decompiled app -- not part of the
+# known protocol, but it's notify-capable, so we listen on it too just in case
+# newer firmware answers here instead. Purely observational: never written to.
+MYSTERY = "7772e5db-3868-4112-a1a9-f2669d106bf3"
 FILE  = "f7ca6486-f81a-426e-a099-0c602cbb5db2"
 BATT  = "00002a19-0000-1000-8000-00805f9b34fb"
 
@@ -127,11 +131,24 @@ async def cmd_wifi(args):
         seen["count"] = 0
         try:
             await c.start_notify(MSG, make_notify_handler(seen))
-            print("notifications enabled: ok")
+            print("notifications enabled (message channel): ok")
         except Exception as e:
-            print(f"notifications enabled: FAILED -- {e}")
+            print(f"notifications enabled (message channel): FAILED -- {e}")
             print("Stopping here -- send this whole output back.")
             return
+
+        # Best-effort: also listen on the unlisted channel found on the real
+        # hardware, purely to rule it in/out. Never written to.
+        mystery_active = False
+        try:
+            def on_mystery(_h, data: bytearray):
+                seen["count"] = seen.get("count", 0) + 1
+                print(f"  <- MYSTERY {bytes(data).hex(' ') or '(empty)'}")
+            await c.start_notify(MYSTERY, on_mystery)
+            mystery_active = True
+            print("notifications enabled (mystery channel): ok")
+        except Exception as e:
+            print(f"notifications enabled (mystery channel): skipped -- {e}")
 
         # Sanity read right after subscribing -- proves the characteristic
         # itself is reachable, independent of whether notify ever fires.
@@ -140,6 +157,15 @@ async def cmd_wifi(args):
             print(f"initial read of message channel: {bytes(b).hex(' ') or '(empty)'}")
         except Exception as e:
             print(f"initial read of message channel failed: {e}")
+
+        # Best-effort: ask BlueZ what MTU actually got negotiated on the wire.
+        # bleak's own mtu_size can be stale/unqueried (hence its warning) --
+        # this is the real number, if bleak's backend exposes it.
+        try:
+            real_mtu = await c._backend._acquire_mtu()
+            print(f"actual negotiated MTU (queried from BlueZ): {real_mtu}")
+        except Exception as e:
+            print(f"could not query the real MTU (non-fatal): {e}")
 
         # Always write WITH response. Our messages are 20-30 bytes but the
         # default BLE packet is only 20 bytes usable -- write-with-response
@@ -156,6 +182,8 @@ async def cmd_wifi(args):
             print(f"\nGuitar rejected registration (error type {seen['error']}).")
             print("Stopping here -- send this whole output back before trying anything else.")
             await c.stop_notify(MSG)
+            if mystery_active:
+                await c.stop_notify(MYSTERY)
             return
 
         print("\n--- turn wifi ON ---")
@@ -164,8 +192,10 @@ async def cmd_wifi(args):
         await send(44, None, "WIFI_HOTSPOT_REQUEST")
         await asyncio.sleep(5.0)   # the guitar's AP needs a moment to actually come up
 
-        print(f"\nnotifications received this session: {seen['count']}")
+        print(f"\nnotifications received this session (both channels): {seen['count']}")
         await c.stop_notify(MSG)
+        if mystery_active:
+            await c.stop_notify(MYSTERY)
 
         hotspot = seen.get("hotspot")
         if not hotspot:
