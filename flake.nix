@@ -12,10 +12,13 @@
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          # python + bleak (talks to BlueZ over D-Bus); bluez gives bluetoothctl
+          # python + bleak (talks to BlueZ over D-Bus); bluez gives bluetoothctl;
+          # networkmanager + curl are shelled out to for the auto-join/probe step
           packages = [
             (pkgs.python3.withPackages (ps: [ ps.bleak ]))
             pkgs.bluez
+            pkgs.networkmanager
+            pkgs.curl
           ];
           shellHook = ''
             echo "Jammy BLE shell. Bluetooth must be on:  systemctl status bluetooth"

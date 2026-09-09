@@ -23,7 +23,7 @@ Protocol (recovered from the decompiled Android app com.playjammy 2.10.2):
   This tool only reads state and flips the wifi radio on -- exactly what the old
   app did during an update. It never writes firmware.
 """
-import argparse, asyncio, json, time
+import argparse, asyncio, json, subprocess, time
 from bleak import BleakScanner, BleakClient
 
 SVC   = "9f3e05e2-2766-4c7d-b4c5-82c6124b803d"
@@ -156,6 +156,41 @@ async def cmd_scan(args):
         except Exception as e:
             print("battery read failed:", e)
 
+async def join_and_probe(ssid: str, password: str, url: str):
+    """The guitar's hotspot only stays up ~15-20s if nothing joins it -- too
+    fast for a human to alt-tab, open wifi settings, and type. This does the
+    join + probe itself, in the background, the instant credentials are known,
+    so it happens in ~1-2s instead. Reuses nmcli/curl (already confirmed on
+    this machine) rather than adding new Python dependencies."""
+    print(f"\n[auto] joining wifi '{ssid}' ...")
+    try:
+        r = await asyncio.to_thread(
+            subprocess.run,
+            ["nmcli", "dev", "wifi", "connect", ssid, "password", password],
+            capture_output=True, text=True, timeout=20,
+        )
+        out = (r.stdout or "") + (r.stderr or "")
+        print("[auto] nmcli:", out.strip() or f"(exit code {r.returncode})")
+        if r.returncode != 0:
+            print("[auto] join failed -- too slow, or wrong network in range? stopping here.")
+            return
+    except Exception as e:
+        print(f"[auto] nmcli failed: {e}")
+        return
+    print(f"[auto] probing {url} ...")
+    try:
+        r = await asyncio.to_thread(
+            subprocess.run,
+            ["curl", "-m", "8", "-sS", "-v", url],
+            capture_output=True, text=True, timeout=15,
+        )
+        print("[auto] --- curl connection trace ---")
+        print(r.stderr)
+        print("[auto] --- response body ---")
+        print(r.stdout or "(empty body)")
+    except Exception as e:
+        print(f"[auto] probe failed: {e}")
+
 async def cmd_wifi(args):
     d = await find(args.address)
     if not d:
@@ -226,12 +261,28 @@ async def cmd_wifi(args):
 
         print("\n--- turn wifi ON ---")
         await send(45, {"i": 1}, "WIFI_HOTSPOT_CHANGE on")
+
+        # The hotspot only stays up ~15-20s if nothing joins it -- fire the
+        # auto-join+probe THE INSTANT we have credentials, in the background,
+        # rather than waiting for the rest of this function to finish.
+        probe_task = None
+        hotspot = seen.get("hotspot")
+        if hotspot:
+            creds = hotspot.get("c") or {}
+            ssid, pw, url = creds.get("n"), creds.get("p"), creds.get("u")
+            if ssid and pw and url:
+                probe_task = asyncio.create_task(join_and_probe(ssid, pw, url))
+
         print("\n--- keep it on after we disconnect (default is OFF -- the guitar")
         print("    normally tears the hotspot down the moment BLE drops) ---")
         await send(117, {"i": 1}, "DEBUG_MODE_LEAVE_ON_DISCONNECTED enable")
         print("\n--- read the login ---")
         await send(44, None, "WIFI_HOTSPOT_REQUEST")
-        await asyncio.sleep(5.0)   # the guitar's AP needs a moment to actually come up
+
+        if probe_task:
+            await probe_task
+        else:
+            await asyncio.sleep(5.0)
 
         print(f"\nnotifications received this session (both channels): {seen['count']}")
         await c.stop_notify(MSG)
