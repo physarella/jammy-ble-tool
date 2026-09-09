@@ -93,6 +93,25 @@ Only run this on a device you don't need to stay connected right then --
 a spare laptop, not the one you're in a call on. It automatically
 reconnects to whatever network was active before it started.
 
+### Hold (unlimited time, on any device -- no spare machine needed)
+
+Add `--hold` and the script keeps its Bluetooth connection to the guitar
+open on purpose, instead of exiting right after printing the login. This
+tests directly whether the hotspot only stays up while something's
+connected to it over Bluetooth:
+
+```bash
+python jammy_ble.py --address 8C:F7:10:7A:8B:43 wifi --hold
+```
+
+It prints the credentials, then just sits there. Go join the network from
+whatever device you like, at whatever pace you like -- no race against a
+timer. Press `Ctrl+C` in the terminal when you're done to disconnect.
+
+If the hotspot dies anyway while this is still running, that tells us it's
+a separate "nobody's joined yet" timeout, not tied to Bluetooth at all --
+useful to know either way.
+
 ## Safe first check (reads only, no pairing needed)
 
 ```bash

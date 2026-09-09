@@ -336,6 +336,22 @@ async def cmd_wifi(args):
             print("(if nmcli isn't available, use your desktop's wifi menu with the")
             print(" same network name and password)")
 
+        if args.hold:
+            # We already sent DEBUG_MODE_LEAVE_ON_DISCONNECTED earlier, but
+            # the hotspot has still been observed dying after ~15-20s anyway
+            # -- this tests directly whether keeping the BLE link open (not
+            # just having sent that flag) is what actually keeps it alive,
+            # instead of guessing at another opcode.
+            print("\n[hold] Keeping this Bluetooth connection open on purpose,")
+            print("[hold] to test whether that's what keeps the hotspot up.")
+            print("[hold] Go join the WiFi network now -- you have as long as")
+            print("[hold] this keeps running. Press Ctrl+C here when you're done.")
+            try:
+                while True:
+                    await asyncio.sleep(3600)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print("\n[hold] stopping -- disconnecting now.")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["scan", "wifi"])
@@ -345,6 +361,11 @@ def main():
                           "automatically. This machine's network WILL switch "
                           "away and back -- only use on a device you don't "
                           "need to stay connected (not one on a call, etc).")
+    ap.add_argument("--hold", action="store_true",
+                     help="after printing the WiFi login, keep the Bluetooth "
+                          "connection open (don't let the script exit) so you "
+                          "have unlimited time to join it from another device. "
+                          "Ctrl+C to disconnect when done.")
     args = ap.parse_args()
     try:
         asyncio.run(cmd_scan(args) if args.cmd == "scan" else cmd_wifi(args))
