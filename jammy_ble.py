@@ -256,7 +256,14 @@ def main():
     ap.add_argument("cmd", choices=["scan", "wifi"])
     ap.add_argument("--address", help="BLE MAC, if name scan doesn't find it")
     args = ap.parse_args()
-    asyncio.run(cmd_scan(args) if args.cmd == "scan" else cmd_wifi(args))
+    try:
+        asyncio.run(cmd_scan(args) if args.cmd == "scan" else cmd_wifi(args))
+    except EOFError:
+        # The guitar drops the BLE link itself once its WiFi hotspot comes up
+        # (it can't run both radios the same way at once). By this point
+        # everything we needed has already printed -- this is just our own
+        # script's polite goodbye landing on a connection that's already gone.
+        pass
 
 if __name__ == "__main__":
     main()
