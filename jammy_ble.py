@@ -41,6 +41,7 @@ TYPES = {
     24:"CONNECTION_REQUEST", 25:"CONNECTION_RESPONSE_OK", 26:"CONNECTION_RESPONSE_ERROR",
     27:"NOT_REGISTERED_DEVICE_ERROR",
     43:"WIFI_HOTSPOT_RESPONSE", 44:"WIFI_HOTSPOT_REQUEST", 45:"WIFI_HOTSPOT_CHANGE",
+    117:"DEBUG_MODE_LEAVE_ON_DISCONNECTED", 118:"DEBUG_MODE_LEAVE_ON_DISCONNECTED_REQUEST",
 }
 
 def decode(data: bytes):
@@ -225,6 +226,9 @@ async def cmd_wifi(args):
 
         print("\n--- turn wifi ON ---")
         await send(45, {"i": 1}, "WIFI_HOTSPOT_CHANGE on")
+        print("\n--- keep it on after we disconnect (default is OFF -- the guitar")
+        print("    normally tears the hotspot down the moment BLE drops) ---")
+        await send(117, {"i": 1}, "DEBUG_MODE_LEAVE_ON_DISCONNECTED enable")
         print("\n--- read the login ---")
         await send(44, None, "WIFI_HOTSPOT_REQUEST")
         await asyncio.sleep(5.0)   # the guitar's AP needs a moment to actually come up
