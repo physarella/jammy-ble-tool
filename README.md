@@ -27,17 +27,28 @@ git pull
 ```
 to grab the latest fixes before running anything.
 
-## How to pair the guitar (found 2026-09-07)
+## You do NOT need to pair this guitar (resolved 2026-09-08)
 
-**Turn the guitar on, then press and hold the Volume KNOB (push straight in
-on it, it's a knob not a button) for 5 seconds.**
+Skip pairing entirely — go straight to "Get the WiFi login" below.
 
-Watch for this: **the Power button starts blinking blue.** That's the
-confirmation it worked and the guitar is now open for pairing. If it doesn't
-blink blue, the hold didn't register — try again.
+We spent a while chasing Bluetooth pairing (button-hold + blue blink puts it
+in pairing mode, etc) because commands were getting sent and nothing ever
+came back. Turned out that had nothing to do with pairing: our messages were
+missing a wrapper byte the real app always adds (confirmed by reading the
+app's actual decompiled code), so the guitar never recognized them as valid
+messages at all. Once that was fixed, everything worked on a plain,
+unpaired connection — matching the real app, which never pairs either.
 
-The pairing window is short once it starts blinking, so run the pairing
-command right away, don't wait around.
+Confirmed separately: a phone's plain Bluetooth settings can't pair with
+this guitar either. It just doesn't support standard pairing. Its own
+`REGISTER` message (sent automatically by this tool) is its actual
+security/login step, and that only needs a normal connection.
+
+<details>
+<summary>Old pairing instructions (kept for reference, not needed)</summary>
+
+Turn the guitar on, press and hold the Volume knob for 5 seconds, watch for
+the Power button blinking blue (that's pairing mode), then:
 
 ```bash
 {
@@ -52,27 +63,35 @@ command right away, don't wait around.
 } | bluetoothctl
 ```
 
-(Replace the address if it's a different guitar — find it with
-`python jammy_ble.py scan`.)
+This never actually succeeded across several attempts (including from a
+phone), which is what led to discovering it isn't needed at all.
+</details>
 
-Takes about 20 seconds total, that's normal. Watch for the line right after
-"Attempting to pair" — should say "Pairing successful."
-
-### STATUS as of 2026-09-07: pairing not yet confirmed working
-
-We know the button-hold + blue blink is needed. We have NOT yet seen a
-successful pair. Next session: try the button hold, watch for the blue
-light, then immediately run the pairing block above and see what it says.
-
-## Once paired: get the WiFi login
+## Get the WiFi login
 
 ```bash
 python jammy_ble.py --address 8C:F7:10:7A:8B:43 wifi
 ```
 
 This registers with the guitar, turns its WiFi on, and reads back the
-network name + password. If it finds them it prints a ready-to-run `nmcli`
-command to join that network.
+network name + password. **By default it does not touch this machine's own
+network at all** -- it just prints the credentials.
+
+### Auto-join (only on a spare device, never one on a call/doing something else)
+
+The guitar's hotspot only stays up ~15-20 seconds if nothing joins it --
+too fast to alt-tab into WiFi settings and type a password by hand. Add
+`--autojoin` and the script does the join AND probes the guitar's web
+server itself, in the background, the instant it has credentials:
+
+```bash
+python jammy_ble.py --address 8C:F7:10:7A:8B:43 wifi --autojoin
+```
+
+**This machine's WiFi will switch away and back over ~10-15 seconds.**
+Only run this on a device you don't need to stay connected right then --
+a spare laptop, not the one you're in a call on. It automatically
+reconnects to whatever network was active before it started.
 
 ## Safe first check (reads only, no pairing needed)
 

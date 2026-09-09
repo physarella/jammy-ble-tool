@@ -156,18 +156,41 @@ async def cmd_scan(args):
         except Exception as e:
             print("battery read failed:", e)
 
+def _run(cmd, timeout):
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+async def _active_wifi_connection_name():
+    """The nmcli connection PROFILE name currently active on wifi, if any --
+    so we can switch back to exactly this after probing, rather than leaving
+    whoever's machine this is stuck on the guitar's isolated network."""
+    try:
+        r = await asyncio.to_thread(
+            _run, ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show", "--active"], 8
+        )
+        for line in r.stdout.splitlines():
+            name, _, kind = line.rpartition(":")
+            if "wireless" in kind:
+                return name
+    except Exception:
+        pass
+    return None
+
 async def join_and_probe(ssid: str, password: str, url: str):
     """The guitar's hotspot only stays up ~15-20s if nothing joins it -- too
     fast for a human to alt-tab, open wifi settings, and type. This does the
     join + probe itself, in the background, the instant credentials are known,
-    so it happens in ~1-2s instead. Reuses nmcli/curl (already confirmed on
-    this machine) rather than adding new Python dependencies."""
+    so it happens in ~1-2s instead, then switches back to whatever wifi
+    network was active before, so the machine running this isn't left
+    stranded on the guitar's internet-less network. Reuses nmcli/curl
+    (already confirmed on this machine) rather than adding new dependencies."""
+    original = await _active_wifi_connection_name()
+    if original:
+        print(f"[auto] (will reconnect to '{original}' when done)")
+
     print(f"\n[auto] joining wifi '{ssid}' ...")
     try:
         r = await asyncio.to_thread(
-            subprocess.run,
-            ["nmcli", "dev", "wifi", "connect", ssid, "password", password],
-            capture_output=True, text=True, timeout=20,
+            _run, ["nmcli", "dev", "wifi", "connect", ssid, "password", password], 20
         )
         out = (r.stdout or "") + (r.stderr or "")
         print("[auto] nmcli:", out.strip() or f"(exit code {r.returncode})")
@@ -177,19 +200,24 @@ async def join_and_probe(ssid: str, password: str, url: str):
     except Exception as e:
         print(f"[auto] nmcli failed: {e}")
         return
-    print(f"[auto] probing {url} ...")
+
     try:
-        r = await asyncio.to_thread(
-            subprocess.run,
-            ["curl", "-m", "8", "-sS", "-v", url],
-            capture_output=True, text=True, timeout=15,
-        )
+        print(f"[auto] probing {url} ...")
+        r = await asyncio.to_thread(_run, ["curl", "-m", "8", "-sS", "-v", url], 15)
         print("[auto] --- curl connection trace ---")
         print(r.stderr)
         print("[auto] --- response body ---")
         print(r.stdout or "(empty body)")
     except Exception as e:
         print(f"[auto] probe failed: {e}")
+    finally:
+        if original:
+            print(f"[auto] reconnecting to '{original}' ...")
+            try:
+                r = await asyncio.to_thread(_run, ["nmcli", "connection", "up", original], 15)
+                print("[auto]", (r.stdout or r.stderr).strip() or f"(exit code {r.returncode})")
+            except Exception as e:
+                print(f"[auto] reconnect failed -- you may need to rejoin your wifi manually: {e}")
 
 async def cmd_wifi(args):
     d = await find(args.address)
@@ -262,12 +290,14 @@ async def cmd_wifi(args):
         print("\n--- turn wifi ON ---")
         await send(45, {"i": 1}, "WIFI_HOTSPOT_CHANGE on")
 
-        # The hotspot only stays up ~15-20s if nothing joins it -- fire the
-        # auto-join+probe THE INSTANT we have credentials, in the background,
-        # rather than waiting for the rest of this function to finish.
+        # Off by default -- this machine's network is NOT touched unless you
+        # explicitly pass --autojoin (see the top-level docstring / README).
+        # When on: the hotspot only stays up ~15-20s if nothing joins it, so
+        # the join+probe fires THE INSTANT we have credentials, in the
+        # background, rather than waiting for the rest of this function.
         probe_task = None
         hotspot = seen.get("hotspot")
-        if hotspot:
+        if hotspot and args.autojoin:
             creds = hotspot.get("c") or {}
             ssid, pw, url = creds.get("n"), creds.get("p"), creds.get("u")
             if ssid and pw and url:
@@ -310,6 +340,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["scan", "wifi"])
     ap.add_argument("--address", help="BLE MAC, if name scan doesn't find it")
+    ap.add_argument("--autojoin", action="store_true",
+                     help="join the guitar's hotspot and probe its web server "
+                          "automatically. This machine's network WILL switch "
+                          "away and back -- only use on a device you don't "
+                          "need to stay connected (not one on a call, etc).")
     args = ap.parse_args()
     try:
         asyncio.run(cmd_scan(args) if args.cmd == "scan" else cmd_wifi(args))
