@@ -62,12 +62,24 @@ def decode(data: bytes):
         txt = body.hex(" ")
     return f"[{t:>3}] {name:<28} {txt}", parsed, t
 
+SLICE_SIZE = 32  # BLEHelperUtilKt.MTU_SIZE in the real app
+
 def frame(t: int, payload=None) -> bytes:
     """byte0 = type, rest = UTF-8 JSON of payload (compact, like the app's Gson)."""
     if payload is None:
         return bytes([t])
     js = json.dumps(payload, separators=(",", ":"))
     return bytes([t]) + js.encode("utf-8")
+
+def wrap_and_slice(payload: bytes) -> list:
+    """Confirmed from the real app's bytecode (wrapBytes() + writeSliceData(),
+    com/rnd64/ble/BLEHelperUtilKt): every outgoing message is wrapped as
+    0xFF + payload + 0x00, then chopped into <=32-byte physical GATT writes.
+    Our messages are all well under 32 bytes even wrapped, so this always
+    returns exactly one chunk -- but it's implemented properly in case that
+    ever changes."""
+    framed = bytes([0xFF]) + payload + bytes([0x00])
+    return [framed[i:i + SLICE_SIZE] for i in range(0, len(framed), SLICE_SIZE)]
 
 async def find(address=None, timeout=12.0):
     print(f"scanning {timeout:.0f}s for the guitar ...")
@@ -83,9 +95,33 @@ async def find(address=None, timeout=12.0):
     return None
 
 def make_notify_handler(seen: dict):
+    # Mirrors handleSliceResponse() in the real app exactly: a notification
+    # starting with 0xFF begins a message, one ending with 0x00 completes it,
+    # and a single notification can be both (a whole message in one piece)
+    # or neither (a middle chunk of a longer one). Confirmed from bytecode.
+    buf = bytearray()
     def on_notify(_handle, data: bytearray):
+        nonlocal buf
+        data = bytes(data)
+        if not data:
+            return  # the empty notification BlueZ sends right on subscribe
+        starts = data[0] == 0xFF
+        ends = data[-1] == 0x00
+        if starts and ends:
+            complete, buf = data[1:-1], bytearray()
+        elif starts:
+            buf = bytearray(data[1:])
+            return
+        elif ends:
+            buf += data[:-1]
+            complete, buf = bytes(buf), bytearray()
+        else:
+            buf += data
+            return
+        if not complete:
+            return
         seen["count"] = seen.get("count", 0) + 1
-        text, parsed, t = decode(bytes(data))
+        text, parsed, t = decode(complete)
         print("  <-", text)
         if t == 43 and isinstance(parsed, dict):
             seen["hotspot"] = parsed          # {"i":..,"c":{"n":..,"p":..,"u":..,"t":..}}
@@ -97,7 +133,8 @@ async def writer(client, response):
     async def send(t, payload=None, label=""):
         b = frame(t, payload)
         print(f"  -> [{t:>3}] {TYPES.get(t,'?'):<24} {b[1:].decode('utf-8','replace')!r}  ({label})")
-        await client.write_gatt_char(MSG, b, response=response)
+        for chunk in wrap_and_slice(b):
+            await client.write_gatt_char(MSG, chunk, response=response)
         await asyncio.sleep(1.5)
     return send
 
